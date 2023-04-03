@@ -1,2 +1,2 @@
-# spring-study
-인프런 강의를 통한 학습
+# web study
+현장실습 프로젝트를 위한 웹 공부
