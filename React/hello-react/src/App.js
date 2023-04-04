@@ -1,7 +1,9 @@
-import MyComponent from './MyComponent';
-import Counter from './Counter';
+import { Component } from 'react';
+import ValidationSample from './ValidationSample';
 
-const App = () => {
-  return <Counter />;
-};
+class App extends Component {
+  render() {
+    return <ValidationSample />;
+  }
+}
 export default App;
