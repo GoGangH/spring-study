@@ -12,7 +12,7 @@
 | 5       | [o] | "    | Ref                        |
 | 6       | [o] | "    | component repeat           |
 | 7       | [o] | "    | Component lifecycle method |
-| 8       | [ ] |      |                            |
+| 8       | [~] | 4/5  | Hooks                      |
 | 9       | [ ] |      |                            |
 | 10      | [ ] |      |                            |
 | 11      | [ ] |      |                            |
