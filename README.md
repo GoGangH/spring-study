@@ -5,3 +5,4 @@
 1. React
 2. Javascript
 3. Spring
+4. git
