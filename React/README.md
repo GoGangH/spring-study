@@ -20,8 +20,8 @@
 | 13      | [ ] |      |                            |
 | 14      | [ ] |      |                            |
 | 15      | [ ] |      |                            |
-| 16      | [~] | 4/3  | Redux                      |
-| 17      | [ ] |      |                            |
+| 16      | [o] | 4/7  | Redux library              |
+| 17      | [o] | 4/7  | Redux application state    |
 | 18      | [ ] |      |                            |
 | 19      | [ ] |      |                            |
 | 20      | [ ] |      |                            |
@@ -52,3 +52,12 @@
 - 6장: Component Repeat
 - 7장: Component lifecycle method
 - 8장: Hooks
+
+### 4/5
+
+- 8장: Hooks
+
+### 4/7
+
+- 16장: Redux library
+- 17장: Redux application state
