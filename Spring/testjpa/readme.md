@@ -25,8 +25,109 @@ ddl-auto같은 기능동작은 Hibernate에서 동작한다.
 ## 명세한 문서를 이용해서 table생성
 
 ### 변수 및 객체에 대한 사전설명
-Metadata : ㅡ메ㅔㅑㅜㅎ
+- `Metadata metadata` : 제공된 매핑 소스를 집계하여 결정된 ORM 모델을 나타냅니다.
+- `ServiceRegistry serviceRegistry` :
+- `Map<String,Object> configurationValues` : 구성 값
+- `DelayedDropRegistry delayedDropRegistry` :  빌드된 DelayedDropAction을 SessionFactory(또는 이후 실행을 관리할 항목)에 다시 등록할 수 있도록 하는 콜백입니다.
 
+```java
+final Set<ActionGrouping> groupings = ActionGrouping.interpret( metadata, configurationValues );
+```
+metadata와 configurationValues를 넣으면 action의 정보를 기반으로 그룹을 제작한다.
+
+```java
+if ( groupings.isEmpty() ) {
+			// no actions specified
+			log.debug( "No actions found; doing nothing" );
+			return;
+		}
+```
+action을 실행할 것이 없다면 출력후 종료된다.
+
+Action에는 아래와 같은 상수가 있다.
+```java
+NONE( "none" )
+CREATE_ONLY( "create", "create-only" )
+DROP( "drop" )
+CREATE( "drop-and-create", "create" )
+CREATE_DROP( null, "create-drop" )
+VALIDATE( null, "validate" )
+UPDATE( null, "update" )
+```
+
+Action 로직 동작은 다음과 같다.
+
+```java
+for ( ActionGrouping grouping : groupings ) {
+    //database action과 script action으로 구분해서 실행한다.
+			// for database action
+			if ( grouping.databaseAction != Action.NONE ) { //Action이 None이라면 패스
+				final Set<String> contributors;
+				if ( databaseActionMap == null ) {
+					databaseActionMap = new HashMap<>();
+					contributors = new HashSet<>();
+					databaseActionMap.put( grouping.databaseAction, contributors );
+				}
+				else {
+					contributors = databaseActionMap.computeIfAbsent(
+							grouping.databaseAction,
+							action -> new HashSet<>()
+					);
+				}
+				contributors.add( grouping.contributor );
+			}
+
+			// for script action
+			if ( grouping.scriptAction != Action.NONE ) {
+				final Set<String> contributors;
+				if ( scriptActionMap == null ) {
+					scriptActionMap = new HashMap<>();
+					contributors = new HashSet<>();
+					scriptActionMap.put( grouping.scriptAction, contributors );
+				}
+				else {
+					contributors = scriptActionMap.computeIfAbsent(
+							grouping.scriptAction,
+							action -> new HashSet<>()
+					);
+				}
+				contributors.add( grouping.contributor );
+			}
+		}
+```
+
+## Action 동작 호이 
+```java
+if ( databaseActionMap != null ) { //databaseAction이 존재하면
+    databaseActionMap.forEach(
+            (action, contributors) -> {
+
+                performDatabaseAction(
+                        action,
+                        metadata,
+                        tool,
+                        serviceRegistry,
+                        executionOptions,
+                        (exportable) -> contributors.contains( exportable.getContributor() )
+                );
+
+                if ( action == Action.CREATE_DROP ) {
+                    delayedDropRegistry.registerOnCloseAction(
+                            tool.getSchemaDropper( configurationValues ).buildDelayedAction(
+                                    metadata,
+                                    executionOptions,
+                                    (exportable) -> contributors.contains( exportable.getContributor() ),
+                                    buildDatabaseTargetDescriptor(
+                                            configurationValues,
+                                            DropSettingSelector.INSTANCE,
+                                            serviceRegistry
+                                    )
+                            )
+                    );
+                }
+            }
+    );
+```
 
 ```java
 private void performCreation(
@@ -64,6 +165,10 @@ final Formatter formatter = format ? FormatStyle.DDL.getFormatter() : FormatStyl
         applyImportSources( options, commandExtractor, format, dialect, targets );
         }
 ```
+
+`serviceRegistry.getService({class})`: 역할별로 service를 반환한다.
+script: 테이블 내 요소
+database: 테이블 자체를 생성
 
 ## Cordinator에서 auto ddl의 방식을 찾아서 로직 실행
 ```java
@@ -182,4 +287,3 @@ determineJdbcMetadaAccessStrategy( options ) == JdbcMetadaAccessStrategy.GROUPED
 
 - INDIVIDUALLY
 : 해당 데이터베이스 테이블이 있는지 확인하기 위해 각각에 대해 하나의 호출을 실행 합니다 SchemaMigrator.SchemaValidatorDatabaseMetaData.getTables(String, String, String, String[])Entity
-
