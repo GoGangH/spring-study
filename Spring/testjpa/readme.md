@@ -24,25 +24,77 @@ ddl-auto같은 기능동작은 Hibernate에서 동작한다.
 
 ## 명세한 문서를 이용해서 table생성
 
+HibernateSchemaManagementTool.java
+
 ### 변수 및 객체에 대한 사전설명
 - `Metadata metadata` : 제공된 매핑 소스를 집계하여 결정된 ORM 모델을 나타냅니다.
+- Metadata :
+```text
+        uuid,
+        options,
+        entityBindingMap,
+        composites,
+        mappedSuperClasses,
+        collectionBindingMap,
+        typeDefRegistry.copyRegistrationMap(),
+        filterDefinitionMap,
+        fetchProfileMap,
+        imports,
+        idGeneratorDefinitionMap,
+        namedQueryMap,
+        namedNativeQueryMap,
+        namedProcedureCallMap,
+        sqlResultSetMappingMap,
+        namedEntityGraphMap,
+        sqlFunctionMap,
+        getDatabase(),
+        bootstrapContext
+```
 - `ServiceRegistry serviceRegistry` :
 - `Map<String,Object> configurationValues` : 구성 값
 - `DelayedDropRegistry delayedDropRegistry` :  빌드된 DelayedDropAction을 SessionFactory(또는 이후 실행을 관리할 항목)에 다시 등록할 수 있도록 하는 콜백입니다.
 
 ```java
-final Set<ActionGrouping> groupings = ActionGrouping.interpret( metadata, configurationValues );
+//DefaultSessionFactoryBuilderService.java
+public SessionFactoryBuilderImplementor createSessionFactoryBuilder(final MetadataImpl metadata, final BootstrapContext bootstrapContext) {
+		return new SessionFactoryBuilderImpl( metadata, bootstrapContext );
+	}
+//
 ```
-metadata와 configurationValues를 넣으면 action의 정보를 기반으로 그룹을 제작한다.
+
+sessionfactory를 빌드하는 과정에서 Schema 생성
+```java
+SchemaManagementToolCoordinator.process(
+					bootMetamodel, //metadata
+					serviceRegistry, //서비스를 할 레지스트리
+					properties, //데이터베이스 구성 속성
+					action -> SessionFactoryImpl.this.delayedDropAction = action //지연된 스키마 삭제를 수행합니다.
+			);
+
+//serviceRegistry
+        serviceRegistry = options
+        .getServiceRegistry()
+        .getService( SessionFactoryServiceRegistryFactory.class )
+        .buildServiceRegistry( this, options );
+```
 
 ```java
-if ( groupings.isEmpty() ) {
-			// no actions specified
-			log.debug( "No actions found; doing nothing" );
-			return;
-		}
+public static void process(
+final Metadata metadata,
+final ServiceRegistry serviceRegistry,
+final Map<String,Object> configurationValues, //properties
+        DelayedDropRegistry delayedDropRegistry) {
+// metadata에 있는 contributors에 configurationValues에 있는 action코드를 분류 database, script
+final Set<ActionGrouping> groupings = ActionGrouping.interpret( metadata, configurationValues );
+
+        //수행할 action이 없다면 리턴
+        if ( groupings.isEmpty() ) {
+        // no actions specified
+        log.debug( "No actions found; doing nothing" );
+        return;
+        }
 ```
-action을 실행할 것이 없다면 출력후 종료된다.
+metadata와 configurationValues를 넣으면 action의 정보를 기반으로 그룹을 제작한다.
 
 Action에는 아래와 같은 상수가 있다.
 ```java
@@ -59,24 +111,24 @@ Action 로직 동작은 다음과 같다.
 
 ```java
 for ( ActionGrouping grouping : groupings ) {
-    //database action과 script action으로 구분해서 실행한다.
 			// for database action
 			if ( grouping.databaseAction != Action.NONE ) { //Action이 None이라면 패스
-				final Set<String> contributors;
+				final Set<String> contributors; //중복이 없게 set설정
 				if ( databaseActionMap == null ) {
 					databaseActionMap = new HashMap<>();
-					contributors = new HashSet<>();
+					contributors = new HashSet<>(); 
 					databaseActionMap.put( grouping.databaseAction, contributors );
 				}
-				else {
+				else {//databaseActionMap에 값이 존재하면 중복 체크후 넣어준다.
 					contributors = databaseActionMap.computeIfAbsent(
 							grouping.databaseAction,
 							action -> new HashSet<>()
 					);
 				}
-				contributors.add( grouping.contributor );
+				contributors.add( grouping.contributor ); //contributor를 추가한다.
 			}
-
+            
+            //script도 똑같은 방법으로 저장
 			// for script action
 			if ( grouping.scriptAction != Action.NONE ) {
 				final Set<String> contributors;
@@ -96,13 +148,31 @@ for ( ActionGrouping grouping : groupings ) {
 		}
 ```
 
-## Action 동작 호이 
+```java
+final SchemaManagementTool tool = serviceRegistry.getService( SchemaManagementTool.class );
+final ConfigurationService configService = serviceRegistry.getService( ConfigurationService.class );
+
+final boolean haltOnError = configService.getSetting(
+        AvailableSettings.HBM2DDL_HALT_ON_ERROR,//가져올 설정의 이름
+        StandardConverters.BOOLEAN, //적용할 변환기
+        false
+); //지정된 변환기와 기본값을 사용하여 명명된 설정을 가져옵니다.
+final ExceptionHandler exceptionHandler = haltOnError ? ExceptionHandlerHaltImpl.INSTANCE : ExceptionHandlerLoggedImpl.INSTANCE; //에러 형식 정의 	
+        //CommandAcceptanceException 오류 처리 or CommandAcceptanceException 오류 처리
+
+final ExecutionOptions executionOptions = buildExecutionOptions( //build 실행 옵션
+        configurationValues,
+        exceptionHandler //오류 처리
+		);
+```
+
+## Action 동작
 ```java
 if ( databaseActionMap != null ) { //databaseAction이 존재하면
     databaseActionMap.forEach(
             (action, contributors) -> {
 
-                performDatabaseAction(
+                performDatabaseAction( // Action에 맞는 수행
                         action,
                         metadata,
                         tool,
@@ -111,12 +181,12 @@ if ( databaseActionMap != null ) { //databaseAction이 존재하면
                         (exportable) -> contributors.contains( exportable.getContributor() )
                 );
 
-                if ( action == Action.CREATE_DROP ) {
-                    delayedDropRegistry.registerOnCloseAction(
-                            tool.getSchemaDropper( configurationValues ).buildDelayedAction(
-                                    metadata,
-                                    executionOptions,
-                                    (exportable) -> contributors.contains( exportable.getContributor() ),
+                if ( action == Action.CREATE_DROP ) { //action이 create drop일때
+                    delayedDropRegistry.registerOnCloseAction( // 빌드된 DelayedDropAction 등록
+                            tool.getSchemaDropper( configurationValues ).buildDelayedAction( //스키마 삭제를 수행하기 위해 지연된 Runnable을 빌드합니다. 이는 기본 데이터 저장소를 암시적으로 대상으로 합니다.
+                                    metadata, //드롭할 메타데이터
+                                    executionOptions, //options- 드롭 옵션
+                                    (exportable) -> contributors.contains( exportable.getContributor() ), //사용할 Contributable 인스턴스에 대한 필터
                                     buildDatabaseTargetDescriptor(
                                             configurationValues,
                                             DropSettingSelector.INSTANCE,
@@ -130,143 +200,163 @@ if ( databaseActionMap != null ) { //databaseAction이 존재하면
 ```
 
 ```java
-private void performCreation(
-        Metadata metadata,
-        Dialect dialect, //sql의 방언
-        ExecutionOptions options,
-        ContributableMatcher contributableInclusionFilter,
-        SourceDescriptor sourceDescriptor, //source의 타입
-        GenerationTarget... targets) {
-final SqlScriptCommandExtractor commandExtractor = tool.getServiceRegistry().getService( SqlScriptCommandExtractor.class );
-
-final boolean format = Helper.interpretFormattingEnabled( options.getConfigurationValues() ); 
-final Formatter formatter = format ? FormatStyle.DDL.getFormatter() : FormatStyle.NONE.getFormatter(); //format할 형식
-
-        switch ( sourceDescriptor.getSourceType() ) { //type을 가져옴
-        case SCRIPT: {
-        createFromScript( sourceDescriptor.getScriptSourceInput(), commandExtractor, formatter, dialect, options, targets );
-        break;
+//performDatabaseAction
+switch ( action ){
+        //update하나만을 예시로 든다.
+        case UPDATE:{
+            final JpaTargetAndSourceDescriptor migrateDescriptor=buildDatabaseTargetDescriptor(
+                executionOptions.getConfigurationValues(),
+                MigrateSettingSelector.INSTANCE,
+                serviceRegistry
+            );
+            tool.getSchemaMigrator(executionOptions.getConfigurationValues()).doMigration(
+                metadata,
+                executionOptions,
+                contributableInclusionFilter,
+                migrateDescriptor
+            );
+            break;
         }
-        case METADATA: {
-        createFromMetadata( metadata, options, contributableInclusionFilter, dialect, formatter, targets );
-        break;
-        }
-        case METADATA_THEN_SCRIPT: {
-        createFromMetadata( metadata, options, contributableInclusionFilter, dialect, formatter, targets );
-        createFromScript( sourceDescriptor.getScriptSourceInput(), commandExtractor, formatter, dialect, options, targets );
-        break;
-        }
-        case SCRIPT_THEN_METADATA: {
-        createFromScript( sourceDescriptor.getScriptSourceInput(), commandExtractor, formatter, dialect, options, targets );
-        createFromMetadata( metadata, options, contributableInclusionFilter, dialect, formatter, targets );
-        }
-        }
-
-        applyImportSources( options, commandExtractor, format, dialect, targets );
-        }
+}
 ```
 
+```java
+private static JpaTargetAndSourceDescriptor buildDatabaseTargetDescriptor(
+        Map<?,?> configurationValues,
+        SettingSelector settingSelector,
+        ServiceRegistry serviceRegistry) {
+    final Object scriptSourceSetting = settingSelector.getScriptSourceSetting( configurationValues );
+    final SourceType sourceType = SourceType.interpret(
+            settingSelector.getSourceTypeSetting( configurationValues ),
+            scriptSourceSetting != null ? SourceType.SCRIPT : SourceType.METADATA
+    );
+
+    final boolean includesScripts = sourceType != SourceType.METADATA;
+    if ( includesScripts && scriptSourceSetting == null ) {
+        throw new SchemaManagementException(
+                "Schema generation configuration indicated to include CREATE scripts, but no script was specified"
+        );
+    }
+
+    final ScriptSourceInput scriptSourceInput = includesScripts
+            ? Helper.interpretScriptSourceSetting(
+                    scriptSourceSetting,
+                    serviceRegistry.getService( ClassLoaderService.class ),
+                    (String) configurationValues.get( AvailableSettings.HBM2DDL_CHARSET_NAME )
+            )
+            : null;
+
+    return new JpaTargetAndSourceDescriptor() {
+        @Override
+        public EnumSet<TargetType> getTargetTypes() {
+            return EnumSet.of( TargetType.DATABASE );
+        }
+
+        @Override
+        public ScriptTargetOutput getScriptTargetOutput() {
+            return null;
+        }
+
+        @Override
+        public SourceType getSourceType() {
+            return sourceType;
+        }
+
+        @Override
+        public ScriptSourceInput getScriptSourceInput() {
+            return scriptSourceInput;
+        }
+    };
+}
+```
+
+getSchemaMigrator (HibernateSchemaManagementTool.java)
+
+```java
+private static final Logger log = Logger.getLogger( HibernateSchemaManagementTool.class );
+
+private ServiceRegistry serviceRegistry;
+private GenerationTarget customTarget;
+
+@Override
+public SchemaMigrator getSchemaMigrator(Map<String,Object> options) {
+    if ( determineJdbcMetadaAccessStrategy( options ) == JdbcMetadaAccessStrategy.GROUPED ) {
+        return new GroupedSchemaMigratorImpl( this, getSchemaFilterProvider( options ).getMigrateFilter() );
+    }
+    else {
+        return new IndividuallySchemaMigratorImpl( this, getSchemaFilterProvider( options ).getMigrateFilter() );
+    }
+}
+```
+
+doMigrate (AbstractSchemaMigrator.java) : 
+```java
+@Override // SchemaMigrator.java
+public void doMigration(
+        Metadata metadata, //변경할 스키마
+        ExecutionOptions options, //변경할 실행 옵션
+        ContributableMatcher contributableInclusionFilter, //사용한 contributable인스턴스에 대한 필터
+        TargetDescriptor targetDescriptor) {// 변경 명령 대상에 대한 설명
+    SqlStringGenerationContext sqlStringGenerationContext = SqlStringGenerationContextImpl.fromConfigurationMap(
+            tool.getServiceRegistry().getService( JdbcEnvironment.class ),
+            metadata.getDatabase(),
+            options.getConfigurationValues()
+    );
+    if ( !targetDescriptor.getTargetTypes().isEmpty() ) {
+        final JdbcContext jdbcContext = tool.resolveJdbcContext( options.getConfigurationValues() );
+        final DdlTransactionIsolator ddlTransactionIsolator = tool.getDdlTransactionIsolator( jdbcContext );
+        try {
+            final DatabaseInformation databaseInformation = Helper.buildDatabaseInformation(
+                    tool.getServiceRegistry(),
+                    ddlTransactionIsolator,
+                    sqlStringGenerationContext,
+                    tool
+            );
+
+            final GenerationTarget[] targets = tool.buildGenerationTargets(
+                    targetDescriptor,
+                    ddlTransactionIsolator,
+                    options.getConfigurationValues()
+            );
+
+            try {
+                for ( GenerationTarget target : targets ) {
+                    target.prepare();
+                }
+
+                try {
+                    performMigration( metadata, databaseInformation, options, contributableInclusionFilter, jdbcContext.getDialect(),
+                            sqlStringGenerationContext, targets );
+                }
+                finally {
+                    for ( GenerationTarget target : targets ) {
+                        try {
+                            target.release();
+                        }
+                        catch (Exception e) {
+                            log.debugf( "Problem releasing GenerationTarget [%s] : %s", target, e.getMessage() );
+                        }
+                    }
+                }
+            }
+            finally {
+                try {
+                    databaseInformation.cleanup();
+                }
+                catch (Exception e) {
+                    log.debug( "Problem releasing DatabaseInformation : " + e.getMessage() );
+                }
+            }
+        }
+        finally {
+            ddlTransactionIsolator.release();
+        }
+    }
+}
+```
 `serviceRegistry.getService({class})`: 역할별로 service를 반환한다.
 script: 테이블 내 요소
 database: 테이블 자체를 생성
-
-## Cordinator에서 auto ddl의 방식을 찾아서 로직 실행
-```java
-private static void performDatabaseAction(
-			final Action action,
-			Metadata metadata,
-			SchemaManagementTool tool,
-			ServiceRegistry serviceRegistry,
-			final ExecutionOptions executionOptions,
-			ContributableMatcher contributableInclusionFilter) {
-
-		// IMPL NOTE : JPA binds source and target info..
-
-		switch ( action ) {
-			case CREATE_ONLY: {
-				//
-				final JpaTargetAndSourceDescriptor createDescriptor = buildDatabaseTargetDescriptor(
-						executionOptions.getConfigurationValues(),
-						CreateSettingSelector.INSTANCE,
-						serviceRegistry
-				);
-				tool.getSchemaCreator( executionOptions.getConfigurationValues() ).doCreation(
-						metadata,
-						executionOptions,
-						contributableInclusionFilter,
-						createDescriptor,
-						createDescriptor
-				);
-				break;
-			}
-			case CREATE:
-			case CREATE_DROP: {
-				final JpaTargetAndSourceDescriptor dropDescriptor = buildDatabaseTargetDescriptor(
-						executionOptions.getConfigurationValues(),
-						DropSettingSelector.INSTANCE,
-						serviceRegistry
-				);
-				tool.getSchemaDropper( executionOptions.getConfigurationValues() ).doDrop(
-						metadata,
-						executionOptions,
-						contributableInclusionFilter,
-						dropDescriptor,
-						dropDescriptor
-				);
-				final JpaTargetAndSourceDescriptor createDescriptor = buildDatabaseTargetDescriptor(
-						executionOptions.getConfigurationValues(),
-						CreateSettingSelector.INSTANCE,
-						serviceRegistry
-				);
-				tool.getSchemaCreator( executionOptions.getConfigurationValues() ).doCreation(
-						metadata,
-						executionOptions,
-						contributableInclusionFilter,
-						createDescriptor,
-						createDescriptor
-				);
-				break;
-			}
-			case DROP: {
-				final JpaTargetAndSourceDescriptor dropDescriptor = buildDatabaseTargetDescriptor(
-						executionOptions.getConfigurationValues(),
-						DropSettingSelector.INSTANCE,
-						serviceRegistry
-				);
-				tool.getSchemaDropper( executionOptions.getConfigurationValues() ).doDrop(
-						metadata,
-						executionOptions,
-						contributableInclusionFilter,
-						dropDescriptor,
-						dropDescriptor
-				);
-				break;
-			}
-			case UPDATE: {
-				final JpaTargetAndSourceDescriptor migrateDescriptor = buildDatabaseTargetDescriptor(
-						executionOptions.getConfigurationValues(),
-						MigrateSettingSelector.INSTANCE,
-						serviceRegistry
-				);
-				tool.getSchemaMigrator( executionOptions.getConfigurationValues() ).doMigration(
-						metadata,
-						executionOptions,
-						contributableInclusionFilter,
-						migrateDescriptor
-				);
-				break;
-			}
-			case VALIDATE: {
-				tool.getSchemaValidator( executionOptions.getConfigurationValues() ).doValidation(
-						metadata,
-						executionOptions,
-						contributableInclusionFilter
-				);
-				break;
-			}
-		}
-	}
-```
 
 >getSchema{auto-ddl option}(매개변수)
 
