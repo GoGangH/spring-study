@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <link rel="stylesheet" href="css/02.02.css">
+    <link rel="stylesheet" href="css/reset.css">
+</head>
+<body>
+<div class="stage">
+    <div class="ilbuni"></div>
+    <div class="ilbuni"></div>
+    <div class="ilbuni"></div>
+</div>
+<script>
+    (function(){
+        const stage = document.querySelector('.stage');
+
+        function clickHandler(e){
+            if(e.target.classList.contains('ilbuni'))
+                stage.removeChild(e.target);
+        }
+
+        stage.addEventListener('click', clickHandler);
+    })();
+</script>
+</body>
+</html>
